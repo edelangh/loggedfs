@@ -105,6 +105,9 @@ static char* getAbsolutePath(const char *path)
 
 static char* getRelativePath(const char* path)
 {
+#ifdef __APPLE__
+	return strdup(path);
+#endif
     char* rPath=new char[strlen(path)+2];
 
     strcpy(rPath,".");
@@ -118,6 +121,9 @@ static char* getRelativePath(const char* path)
  */
 static char* getcallername()
 {
+#ifdef __APPLE__
+	return strdup("TODO: MacOsX ProcessName"); // TODO: Implement on mac
+#endif
     char filename[100];
     sprintf(filename,"/proc/%d/cmdline",fuse_get_context()->pid);
     FILE * proc=fopen(filename,"rt");
@@ -197,7 +203,7 @@ void send_log(sqlite3 *db, pthread_cond_t *cond_var, char *str) {
 
     // First, store it in sql
     sqlite3_prepare_v2(db, "INSERT INTO logs (str, uploaded) VALUES (?, 0)", -1, &stmt, NULL);
-    sqlite3_bind_text(stmt, 1, str, -1, &free);
+	sqlite3_bind_text(stmt, 1, str, -1, NULL); // TODO: replace NULL by &free, but it's segv ;)
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         printf("ERROR inserting data: %s\n", sqlite3_errmsg(db));
@@ -222,10 +228,15 @@ static void loggedfs_log(const char* path,const char* action,const int returncod
         va_list args;
         char buf[1024];
         va_start(args,format);
-        memset(buf,0,1024);
+        memset(buf,0,sizeof(buf));
         vsprintf(buf,format,args);
         strcat(buf," {%s} [ pid = %d %s uid = %d ]");
-        asprintf(&mybuf, buf,retname, fuse_get_context()->pid,config.isPrintProcessNameEnabled()?getcallername():"", fuse_get_context()->uid);
+        asprintf(&mybuf, buf,
+						retname,
+						fuse_get_context()->pid,
+						config.isPrintProcessNameEnabled()?getcallername():"",
+						fuse_get_context()->uid
+						);
         send_log(env.db, env.cond_var, mybuf);
         va_end(args);
     }
@@ -924,7 +935,7 @@ int main(int argc, char *argv[])
         int err;
         if ((err = sqlite3_open("/tmp/fslogs.db", &db)) != SQLITE_OK) {
             printf("Error opening sqlite database : %s\n", sqlite3_errstr(err));
-            return 0;
+            return 1;
         }
 
         if (sqlite3_exec(db, "SELECT 1 from logs", NULL, NULL, NULL) != SQLITE_OK)

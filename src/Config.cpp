@@ -43,7 +43,7 @@ xmlChar* PNAME_ENABLED=xmlCharStrdup("printProcessName");
 Config::Config()
 {
     // default values
-    enabled=true; 
+    enabled=true;
     pNameEnabled=true;
 }
 
@@ -58,9 +58,9 @@ void Config::parse(xmlNode * a_node)
 
 xmlNode *cur_node = NULL;
 
-for (cur_node = a_node; cur_node; cur_node = cur_node->next) 
+for (cur_node = a_node; cur_node; cur_node = cur_node->next)
 	{
-	if (cur_node->type == XML_ELEMENT_NODE) 
+	if (cur_node->type == XML_ELEMENT_NODE)
 		{
 		xmlAttr *attr=cur_node->properties;
 		if (xmlStrcmp(cur_node->name,ROOT)==0)
@@ -101,7 +101,7 @@ for (cur_node = a_node; cur_node; cur_node = cur_node->next)
 			char* buffer=new char[100];
 			while (attr!=NULL)
 				{
-				
+
 				sprintf(buffer,"%s",attr->children->content); // I guess there's another way to do that
 				if (xmlStrcmp(attr->name,EXTENSION)==0)
 					{
@@ -143,10 +143,10 @@ for (cur_node = a_node; cur_node; cur_node = cur_node->next)
 
 bool Config::loadFromXml(xmlDoc* doc)
 {
-	
+
 	xmlNode *root_element = NULL;
 	root_element = xmlDocGetRootElement(doc);
-	
+
 	parse(root_element);
 	xmlFreeDoc(doc);
 	xmlCleanupParser();
@@ -158,7 +158,7 @@ bool Config::loadFromXmlBuffer(const char* buffer)
 	xmlDoc *doc = NULL;
 
 	LIBXML_TEST_VERSION
-	
+
 	doc=xmlReadMemory(buffer,strlen(buffer),"",NULL, XML_PARSE_NONET);
 	return loadFromXml(doc);
 }
@@ -168,7 +168,7 @@ bool Config::loadFromXmlFile(const char* filename)
 	xmlDoc *doc = NULL;
 
 	LIBXML_TEST_VERSION
-	
+
 	doc = xmlReadFile(filename, NULL, 0);
 	return loadFromXml(doc);
 }
@@ -199,7 +199,7 @@ bool Config::shouldLog(const char* filename, int uid, const char* action, const 
 	}
 
     }
-    
+
     return should;
 }
 
