@@ -52,6 +52,11 @@
 #include <grp.h>
 #include "Config.h"
 
+#include <iostream>
+#include <string>
+#include <sstream>
+#include <vector>
+
 #define PUSHARG(ARG) \
 assert(out->fuseArgc < MaxFuseArgs); \
 out->fuseArgv[out->fuseArgc++] = ARG
@@ -133,42 +138,48 @@ static char* getcallername()
     return strdup(cmdline);
 }
 
-int upload_single(void *data, int col_nbr, char **cols, char **col_name)
+int upload_rows(std::vector<std::string> result)
 {
     CURL *curl = curl_easy_init();
-    struct curl_slist *headers = NULL;
-
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    curl_easy_setopt(curl, CURLOPT_URL, "http://bbfs.seed-up.org/data");
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(curl, CURLOPT_POST, 1);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    for (int i = 0; i < col_nbr; i++)
+    int postsize = 0;
     {
-        if (strcmp(col_name[i], "str") == 0)
+        struct curl_slist *headers = NULL;
         {
-            printf("Add to postfields: %s\n", cols[i]);
-            char *json;
-            asprintf(&json, "{\"str\": \"%s\"}", cols[i]);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(json));
-            break;
-        }
-    }
-    int res = curl_easy_perform(curl);
-    int http_code = 0;
+            std::stringstream   ss;
 
-    curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &http_code);
-    if (res != CURLE_OK)
-        dprintf(2, "%s:%d: ERROR with curl\n", __FILE__, __LINE__);
-    else if (http_code >= 400)
-        dprintf(2, "%s:%d: ERROR http code: %d\n", __FILE__, __LINE__, http_code);
-    else
-        (void)1; // TODO: Data is sended so set uploadted to 1
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+
+            curl_easy_setopt(curl, CURLOPT_URL, "http://bbfs.seed-up.org/data");
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+            ss << "{\"str\": [";
+            auto ite = result.end();
+            for (auto it = result.begin(); it != ite; ++it)
+                ss << "\"" << *it << "\"" << (it + 1 != ite ? "," : "");
+            ss << "]}";
+
+            std::string json = ss.str();
+            postsize = json.length();
+
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, postsize);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json.c_str());
+            int res = curl_easy_perform(curl);
+            int http_code = 0;
+
+            curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &http_code);
+            if (res != CURLE_OK)
+                postsize = -1, dprintf(2, "%s:%d: ERROR with curl\n", __FILE__, __LINE__);
+            else if (http_code >= 400)
+                postsize = -2, dprintf(2, "%s:%d: ERROR http code: %d\n", __FILE__, __LINE__, http_code);
+            else
+                (void)1; // TODO: Data is sended so set uploadted to 1
+        }
+        curl_slist_free_all(headers);
+    }
     curl_easy_cleanup(curl);
-    return (0);
+    return (postsize);
 }
 
 void *upload_thread(void *data)
@@ -176,23 +187,33 @@ void *upload_thread(void *data)
     pthread_mutex_lock(env.m);
     while (true)
     {
-        // SELECT * FROM db WHERE uploaded=false
-        // upload
-        // update
-        // upload
-        // update
-        // upload
-        // update ?
-        //
-        //
-        // Or maybe I can actually try to be slightly smarter and batch upload ?
-        // Also, we should probably uniquely identify the machine. Need to store
-        // a UUID somewhere (preferably in the sqlite db) that says who this is.
-        //
-        // This way, I can just bulk send with the UUID, and the merge should be
-        // easy.
-        // TODO: Proper error handling
-        sqlite3_exec(env.db, "SELECT * FROM logs WHERE uploaded=0", upload_single, NULL, NULL);
+        sleep(10);
+
+        // TODO: upload machine UUID
+        { // Upload logs
+            sqlite3_stmt                *stmt;
+            std::vector<std::string>    result;
+
+            sqlite3_prepare_v2(env.db, "SELECT * FROM logs WHERE uploaded=0", -1, &stmt, NULL);
+            sqlite3_step(stmt);
+
+            while(sqlite3_column_text(stmt, 0))
+            {
+                // We know that COL 1 is str
+                result.push_back(std::string(strdup((char*)sqlite3_column_text(stmt, 1))));
+                sqlite3_step(stmt);
+            }
+            int postsize = upload_rows(result);
+            std::cout << "Successful upload " << result.size() << " elems"
+                      << "(" << postsize << " bytes)" << std::endl;
+            sqlite3_finalize(stmt);
+        }
+        { // UPDATE uploaded logs
+            char update_logs[] = "UPDATE logs SET uploaded=1 WHERE uploaded=0";
+            int rc = sqlite3_exec(env.db, update_logs, NULL, NULL, NULL);
+            if (rc != SQLITE_OK)
+                printf("ERROR updating logs: %s\n", sqlite3_errmsg(env.db));
+        }
         pthread_cond_wait(env.cond_var, env.m);
     }
     pthread_mutex_unlock(env.m);
