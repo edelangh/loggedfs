@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-Wall -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26 `xml2-config --cflags`
+CFLAGS=-Wall -std=c++11 -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26 `xml2-config --cflags`
 LDFLAGS=-Wall -lpcre `pkg-config fuse --libs` `xml2-config --libs` -lsqlite3 -lpthread -lcurl
 srcdir=src
 builddir=build

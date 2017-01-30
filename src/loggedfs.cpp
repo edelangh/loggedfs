@@ -78,7 +78,6 @@ struct LoggedFS_Args
 
 struct env {
     sqlite3 *db;
-    pthread_cond_t *cond_var;
     pthread_mutex_t *m;
 };
 
@@ -184,7 +183,6 @@ int upload_rows(std::vector<std::string> result)
 
 void *upload_thread(void *data)
 {
-    pthread_mutex_lock(env.m);
     while (true)
     {
         sleep(10);
@@ -214,14 +212,13 @@ void *upload_thread(void *data)
             if (rc != SQLITE_OK)
                 printf("ERROR updating logs: %s\n", sqlite3_errmsg(env.db));
         }
-        pthread_cond_wait(env.cond_var, env.m);
     }
-    pthread_mutex_unlock(env.m);
 }
 
-void send_log(sqlite3 *db, pthread_cond_t *cond_var, char *str) {
+void send_log(sqlite3 *db, char *str) {
     sqlite3_stmt *stmt;
 
+    pthread_mutex_lock(env.m);
     // First, store it in sql
     sqlite3_prepare_v2(db, "INSERT INTO logs (str, uploaded) VALUES (?, 0)", -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, str, -1, NULL); // TODO: replace NULL by &free, but it's segv ;)
@@ -232,8 +229,7 @@ void send_log(sqlite3 *db, pthread_cond_t *cond_var, char *str) {
     }
     sqlite3_finalize(stmt);
 
-    // Then, send it to the upload thread
-    pthread_cond_signal(cond_var);
+    pthread_mutex_unlock(env.m);
 }
 
 static void loggedfs_log(const char* path,const char* action,const int returncode,const char *format,...)
@@ -258,7 +254,7 @@ static void loggedfs_log(const char* path,const char* action,const int returncod
 						config.isPrintProcessNameEnabled()?getcallername():"",
 						fuse_get_context()->uid
 						);
-        send_log(env.db, env.cond_var, mybuf);
+        send_log(env.db, mybuf);
         va_end(args);
     }
 }
@@ -873,7 +869,6 @@ int main(int argc, char *argv[])
 {
     char* input=new char[2048]; // 2ko MAX input for configuration
     sqlite3 *db;
-    pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
     pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     pthread_t t;
 
@@ -974,7 +969,6 @@ int main(int argc, char *argv[])
                 printf("Success creating table logs\n");
         }
         env.db = db;
-        env.cond_var = &cond_var;
         env.m = &m;
 
         if (pthread_create(&t, NULL, &upload_thread, NULL) < 0)
