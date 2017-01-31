@@ -44,7 +44,7 @@ char    *get_mac_addr(char *buffer)
     char            *mac_str = (buffer ? buffer : (char*)malloc(19));
 
     if (success) memcpy(mac_address, ifr.ifr_hwaddr.sa_data, 6);
-    snprintf(mac_str, 19, "%2X:%2X:%2X:%2X:%2X:%2X\n",
+    snprintf(mac_str, 19, "%2X:%2X:%2X:%2X:%2X:%2X",
             mac_address[0], mac_address[1], mac_address[2],
             mac_address[3], mac_address[4], mac_address[5]);
     return mac_str;

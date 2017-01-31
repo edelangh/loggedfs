@@ -141,6 +141,7 @@ static char* getRelativePath(const char* path)
 /*
  * Returns the name of the process which accessed the file system.
  */
+/*
 static char* getcallername()
 {
 #ifdef __APPLE__
@@ -155,8 +156,8 @@ static char* getcallername()
     fclose(proc);
     return strdup(cmdline);
 }
-
-int upload_rows(std::vector<std::string> result)
+*/
+int upload_rows(std::vector<t_logs> result)
 {
     CURL *curl = curl_easy_init();
     int postsize = 0;
@@ -172,15 +173,23 @@ int upload_rows(std::vector<std::string> result)
             curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-            ss << "{\"str\": [";
+            ss << "{\"logs\": [";
             auto ite = result.end();
             for (auto it = result.begin(); it != ite; ++it)
-                ss << "\"" << *it << "\"" << (it + 1 != ite ? "," : "");
+            {
+                t_logs  logs = *it;
+                ss << "{"
+                    << "\"path\":\"" << logs.path << "\","
+                    << "\"inode\":\"" << logs.inode << "\","
+                    << "\"user_name\":\"" << logs.user_name << "\","
+                    << "\"mac\":\"" << logs.mac << "\","
+                    << "\"action\":\"" << logs.action << "\","
+                    << "\"timestamp\":\"" << logs.timestamp << "\""
+                    << (it + 1 != ite ? "}," : "}");
+            }
             ss << "]}";
-
             std::string json = ss.str();
             postsize = json.length();
-
             curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, postsize);
             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json.c_str());
             int res = curl_easy_perform(curl);
@@ -209,15 +218,40 @@ void *upload_thread(void *data)
         // TODO: upload machine UUID
         { // Upload logs
             sqlite3_stmt                *stmt;
-            std::vector<std::string>    result;
+            std::vector<t_logs>         result;
 
-            sqlite3_prepare_v2(env.db, "SELECT * FROM logs WHERE uploaded=0 GROUP BY str", -1, &stmt, NULL);
+            sqlite3_prepare_v2(env.db, "SELECT "\
+                    "id,str,path,user_name,mac,action,inode,uploaded,strftime('%s', timestamp)"\
+                    " FROM logs WHERE uploaded=0 GROUP BY str", -1, &stmt, NULL);
             sqlite3_step(stmt);
 
             while(sqlite3_column_text(stmt, 0))
             {
                 // We know that COL 1 is str
-                result.push_back(std::string(strdup((char*)sqlite3_column_text(stmt, 1))));
+                // TODO: freeeeee !
+                t_logs logs = (t_logs){
+                        atoi((char*)sqlite3_column_text(stmt, 0)),
+                        strdup((const char*)sqlite3_column_text(stmt, 1)),
+                        strdup((const char*)sqlite3_column_text(stmt, 2)),
+                        strdup((const char*)sqlite3_column_text(stmt, 3)),
+                        strdup((const char*)sqlite3_column_text(stmt, 4)),
+                        strdup((const char*)sqlite3_column_text(stmt, 5)),
+                        (size_t)atoi((char*)sqlite3_column_text(stmt, 6)),
+                        atoi((char*)sqlite3_column_text(stmt, 7)),
+                        (size_t)atoi((char*)sqlite3_column_text(stmt, 8))
+                        };
+                result.push_back(logs);
+                printf("%d %s %s %s %s %s %zu %d %zu\n",
+                        logs.id,
+                        logs.str,
+                        logs.path,
+                        logs.user_name,
+                        logs.mac,
+                        logs.action,
+                        logs.inode,
+                        logs.uploaded,
+                        logs.timestamp
+                      );
                 sqlite3_step(stmt);
             }
             if (result.size() > 0)
@@ -243,7 +277,7 @@ void send_log(sqlite3 *db, t_logs& logs) {
 
     pthread_mutex_lock(env.m);
     // First, store it in sql
-    snprintf(zu, sizeof(zu), "%zu\n", logs.inode);
+    snprintf(zu, sizeof(zu), "%zu", logs.inode);
     sqlite3_prepare_v2(db, "INSERT INTO logs (str, path, user_name, mac, action, inode)"\
                                     "VALUES  (  ?,    ?,         ?,    ?,     ?,     ?)", -1, &stmt, NULL);
 
