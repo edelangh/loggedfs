@@ -131,6 +131,7 @@ static char* getcallername()
     char filename[100];
     sprintf(filename,"/proc/%d/cmdline",fuse_get_context()->pid);
     FILE * proc=fopen(filename,"rt");
+    if (!proc) return NULL;
     char cmdline[256]="";
     fread(cmdline,sizeof(cmdline),1,proc);
     fclose(proc);
