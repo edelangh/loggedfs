@@ -10,9 +10,9 @@ all: $(builddir) loggedfs
 $(builddir):
 	mkdir $(builddir)
 
-loggedfs: $(builddir)/loggedfs.o $(builddir)/Config.o $(builddir)/Filter.o
-	$(CC) -o loggedfs $(builddir)/loggedfs.o $(builddir)/Config.o $(builddir)/Filter.o $(LDFLAGS)
-$(builddir)/loggedfs.o: $(builddir)/Config.o $(builddir)/Filter.o $(srcdir)/loggedfs.cpp
+loggedfs: $(builddir)/loggedfs.o $(builddir)/Config.o $(builddir)/Filter.o $(builddir)/get_mac_addr.o
+	$(CC) -o loggedfs $(builddir)/loggedfs.o $(builddir)/Config.o $(builddir)/Filter.o $(builddir)/get_mac_addr.o $(LDFLAGS)
+$(builddir)/loggedfs.o: $(builddir)/Config.o $(builddir)/Filter.o $(srcdir)/loggedfs.cpp $(srcdir)/utils.h
 	$(CC) -o $(builddir)/loggedfs.o -c $(srcdir)/loggedfs.cpp $(CFLAGS)
 
 $(builddir)/Config.o: $(builddir)/Filter.o $(srcdir)/Config.cpp $(srcdir)/Config.h
@@ -21,6 +21,8 @@ $(builddir)/Config.o: $(builddir)/Filter.o $(srcdir)/Config.cpp $(srcdir)/Config
 $(builddir)/Filter.o: $(srcdir)/Filter.cpp $(srcdir)/Filter.h
 	$(CC) -o $(builddir)/Filter.o -c $(srcdir)/Filter.cpp $(CFLAGS)
 
+$(builddir)/get_mac_addr.o: $(srcdir)/get_mac_addr.c $(srcdir)/utils.h
+	$(CC) -o $(builddir)/get_mac_addr.o -c $(srcdir)/get_mac_addr.c $(CFLAGS)
 clean:
 	rm -rf $(builddir)/
 

@@ -63,6 +63,9 @@ out->fuseArgv[out->fuseArgc++] = ARG
 
 using namespace std;
 
+#include "utils.h"
+#define LOGGED_ACTION "open"
+
 static Config config;
 static int savefd;
 
@@ -77,9 +80,24 @@ struct LoggedFS_Args
 };
 
 struct env {
-    sqlite3 *db;
+    sqlite3         *db;
     pthread_mutex_t *m;
+    char            mac[19];
+    char            *uname;
 };
+
+typedef struct  s_logs
+{
+    int         id;
+    char        *str;
+    char        *path;
+    char        *user_name;
+    char        *mac;
+    char        *action;
+    size_t      inode;
+    bool        uploaded;
+    size_t      timestamp;
+}               t_logs;
 
 static struct env env;
 
@@ -193,7 +211,7 @@ void *upload_thread(void *data)
             sqlite3_stmt                *stmt;
             std::vector<std::string>    result;
 
-            sqlite3_prepare_v2(env.db, "SELECT * FROM logs WHERE uploaded=0", -1, &stmt, NULL);
+            sqlite3_prepare_v2(env.db, "SELECT * FROM logs WHERE uploaded=0 GROUP BY str", -1, &stmt, NULL);
             sqlite3_step(stmt);
 
             while(sqlite3_column_text(stmt, 0))
@@ -202,9 +220,12 @@ void *upload_thread(void *data)
                 result.push_back(std::string(strdup((char*)sqlite3_column_text(stmt, 1))));
                 sqlite3_step(stmt);
             }
-            int postsize = upload_rows(result);
-            std::cout << "Successful upload " << result.size() << " elems"
-                      << "(" << postsize << " bytes)" << std::endl;
+            if (result.size() > 0)
+            {
+                int postsize = upload_rows(result);
+                std::cout << "Successful upload " << result.size() << " elems"
+                          << "(" << postsize << " bytes)" << std::endl;
+            }
             sqlite3_finalize(stmt);
         }
         { // UPDATE uploaded logs
@@ -216,13 +237,22 @@ void *upload_thread(void *data)
     }
 }
 
-void send_log(sqlite3 *db, char *str) {
-    sqlite3_stmt *stmt;
+void send_log(sqlite3 *db, t_logs& logs) {
+    sqlite3_stmt    *stmt;
+    char            zu[32];
 
     pthread_mutex_lock(env.m);
     // First, store it in sql
-    sqlite3_prepare_v2(db, "INSERT INTO logs (str, uploaded) VALUES (?, 0)", -1, &stmt, NULL);
-	sqlite3_bind_text(stmt, 1, str, -1, NULL); // TODO: replace NULL by &free, but it's segv ;)
+    snprintf(zu, sizeof(zu), "%zu\n", logs.inode);
+    sqlite3_prepare_v2(db, "INSERT INTO logs (str, path, user_name, mac, action, inode)"\
+                                    "VALUES  (  ?,    ?,         ?,    ?,     ?,     ?)", -1, &stmt, NULL);
+
+	sqlite3_bind_text(stmt, 1, logs.str, -1, NULL); // TODO: replace NULL by &free, but it's segv ;)
+	sqlite3_bind_text(stmt, 2, logs.path, -1, NULL);
+	sqlite3_bind_text(stmt, 3, logs.user_name, -1, NULL);
+	sqlite3_bind_text(stmt, 4, logs.mac, -1, NULL);
+	sqlite3_bind_text(stmt, 5, logs.action, -1, NULL);
+	sqlite3_bind_text(stmt, 6, zu, -1, NULL);
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         printf("ERROR inserting data: %s\n", sqlite3_errmsg(db));
@@ -233,31 +263,24 @@ void send_log(sqlite3 *db, char *str) {
     pthread_mutex_unlock(env.m);
 }
 
+// TODO: remove format and va_args
 static void loggedfs_log(const char* path,const char* action,const int returncode,const char *format,...)
 {
-    const char *retname;
-    char *mybuf;
-    if (returncode >= 0)
-        retname = "SUCCESS";
-    else
-        retname = "FAILURE";
-    if (config.shouldLog(path,fuse_get_context()->uid,action,retname))
+    char    sbuf[128];
+
+    // Yay, this is not neat, but f***
+    if (strstr(LOGGED_ACTION, action) == NULL)
+        return ;
+    t_logs  logs = (t_logs){-1, (char*)sbuf, (char*)path, env.uname, env.mac, (char*)action, 0, 0, (size_t)time(0)};
+
+    struct stat st;
+    if (stat(path, &st) == 0)
     {
-        va_list args;
-        char buf[1024];
-        va_start(args,format);
-        memset(buf,0,sizeof(buf));
-        vsprintf(buf,format,args);
-        strcat(buf," {%s} [ pid = %d %s uid = %d ]");
-        asprintf(&mybuf, buf,
-						retname,
-						fuse_get_context()->pid,
-						config.isPrintProcessNameEnabled()?getcallername():"",
-						fuse_get_context()->uid
-						);
-        send_log(env.db, mybuf);
-        va_end(args);
+        logs.inode = st.st_ino;
+        dprintf(1, "determine ino: %zu\n", logs.inode);
     }
+    snprintf(sbuf, sizeof(sbuf), "%zu:%s", logs.timestamp, logs.path);
+    send_log(env.db, logs);
 }
 
 static void* loggedFS_init(struct fuse_conn_info* info)
@@ -744,7 +767,7 @@ static int loggedFS_removexattr(const char *path, const char *name)
 static void usage(char *name)
 {
      fprintf(stderr, "Usage:\n");
-     fprintf(stderr, "%s [-h] | [-l log-file] [-c config-file] [-f] [-p] [-e] /directory-mountpoint\n",name);
+     fprintf(stderr, "%s [-h] | [-l log-file] [-c config-file] [-f] [-p] [-e] -u USER /directory-mountpoint\n",name);
      fprintf(stderr, "Type 'man loggedfs' for more details\n");
      return;
 }
@@ -771,6 +794,7 @@ bool processArgs(int argc, char *argv[], LoggedFS_Args *out)
     int res;
 
     bool got_p = false;
+    bool got_uname = false;
 
 // We need the "nonempty" option to mount the directory in recent FUSE's
 // because it's non empty and contains the files that will be logged.
@@ -785,8 +809,7 @@ bool processArgs(int argc, char *argv[], LoggedFS_Args *out)
 #else
   #define COMMON_OPTS "nonempty,use_ino"
 #endif
-
-    while ((res = getopt (argc, argv, "hpfec:l:")) != -1)
+    while ((res = getopt (argc, argv, "hpfec:l:u:")) != -1)
     {
         switch (res)
         {
@@ -805,6 +828,11 @@ bool processArgs(int argc, char *argv[], LoggedFS_Args *out)
             got_p = true;
             printf("LoggedFS running as a public filesystem\n");
             break;
+        case 'u':
+            got_uname = true;
+            env.uname = strdup(optarg);
+            printf("Running user %s\n", env.uname);
+            break ;
         case 'e':
 #ifndef __APPLE__
             PUSHARG("-o");
@@ -829,6 +857,17 @@ bool processArgs(int argc, char *argv[], LoggedFS_Args *out)
     {
         PUSHARG("-o");
         PUSHARG(COMMON_OPTS);
+    }
+    if (!got_uname)
+    {
+        char    *env_user = getenv("USER");
+        if (env_user == NULL || strcmp(env_user, "root") == 0)
+        {
+            dprintf(2, "Could't determine USER name\n");
+            usage(argv[0]);
+            return false;
+        }
+        else env.uname = env_user;
     }
 #undef COMMON_OPTS
 
@@ -868,7 +907,7 @@ bool processArgs(int argc, char *argv[], LoggedFS_Args *out)
 
 int main(int argc, char *argv[])
 {
-    char* input=new char[2048]; // 2ko MAX input for configuration
+    char* input = new char[2048]; // 2ko MAX input for configuration
     sqlite3 *db;
     pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     pthread_t t;
@@ -945,6 +984,8 @@ int main(int argc, char *argv[])
             }
         }
 
+        get_mac_addr((char*)env.mac);
+
         printf("chdir to %s\n",loggedfsArgs->mountPoint);
         chdir(loggedfsArgs->mountPoint);
         savefd = open(".", 0);
@@ -959,9 +1000,15 @@ int main(int argc, char *argv[])
         {
             printf("Creating table logs...\n");
             char create_logs[] = "CREATE TABLE logs ("\
-                                 "id       INTEGER PRIMARY KEY AUTOINCREMENT,"\
-                                 "str      TEXT,"\
-                                 "uploaded INT"\
+                                 "id        INTEGER PRIMARY KEY AUTOINCREMENT,"\
+                                 "str       TEXT,"\
+                                 "path      TEXT,"\
+                                 "user_name TEXT,"
+                                 "mac       TEXT,"
+                                 "action    TEXT,"
+                                 "inode     INT,"\
+                                 "uploaded  INT DEFAULT 0,"\
+                                 "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP"\
                                  ");";
             int rc = sqlite3_exec(db, create_logs, NULL, NULL, NULL);
             if (rc != SQLITE_OK)
